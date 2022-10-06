@@ -1,64 +1,63 @@
-import time
 from datetime import datetime
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from shlex import split
+from subprocess import STDOUT, Popen
+import time
+from typing import Any, Dict, List, Optional
 
-from feathr.spark_provider._abc import SparkJobLauncher
 from loguru import logger
-
 from pyspark import *
 
-from subprocess import STDOUT, Popen
-from shlex import split
 from feathr.constants import FEATHR_MAVEN_ARTIFACT
+from feathr.spark_provider._abc import SparkJobLauncher
 
 
+class _FeathrLocalSparkJobLauncher(SparkJobLauncher):
+    """Class to interact with local Spark. This class is not intended to be used in Production environments.
+    It is intended to be used for testing and development purposes. No authentication is required to use this class.
 
-class _FeathrDLocalSparkJobLauncher(SparkJobLauncher):
-    """Class to interact with local Spark
-        This class is not intended to be used in Production environments.
-        It is intended to be used for testing and development purposes.
-        No authentication is required to use this class.
-        Args:
-            workspace_path (str): Path to the workspace
+    Args:
+        workspace_path (str): Path to the workspace
     """
+
     def __init__(
         self,
         workspace_path: str,
         master: str = None,
-        debug_folder:str = "debug",
-        clean_up:bool = True,
-        retry:int = 3,
-        retry_sec:int = 5,
+        debug_folder: str = "debug",
+        clean_up: bool = True,
+        retry: int = 3,
+        retry_sec: int = 5,
     ):
-        """Initialize the Local Spark job launcher
-        """
-        self.workspace_path = workspace_path,
+        """Initialize the Local Spark job launcher"""
+        self.workspace_path = (workspace_path,)
         self.debug_folder = debug_folder
         self.spark_job_num = 0
         self.clean_up = clean_up
         self.retry = retry
         self.retry_sec = retry_sec
         self.packages = self._get_default_package()
-        self.master = master
+        self.master = master or "local[*]"
 
     def upload_or_get_cloud_path(self, local_path_or_http_path: str):
         """For Local Spark Case, no need to upload to cloud workspace."""
         return local_path_or_http_path
 
-    def submit_feathr_job(self, job_name: str, main_jar_path: str = None,  main_class_name: str = None, arguments: List[str] = None,
-                          python_files: List[str]= None, configuration: Dict[str, str] = {}, properties: Dict[str, str] = {}, reference_files_path: List[str] = None, job_tags: Dict[str, str] = None):
-        """
-        Submits the Feathr job to local spark, using subprocess args.
-
-        reference files: put everything there and the function will automatically categorize them based on the
-        extension name to either the "files" argument in the Livy API, or the "jars" argument in the Livy API. The
-        path can be local path and this function will automatically upload the function to the corresponding azure
-        storage
-
-        Also, note that the Spark application will automatically run on YARN cluster mode. You cannot change it if
+    def submit_feathr_job(
+        self,
+        job_name: str,
+        main_jar_path: str,
+        main_class_name: str,
+        arguments: List[str] = None,
+        python_files: List[str] = None,
+        configuration: Dict[str, str] = {},
+        properties: Dict[str, str] = {},
+        *_,
+    ) -> Any:
+        """Submits the Feathr job to local spark, using subprocess args.
+        Note that the Spark application will automatically run on YARN cluster mode. You cannot change it if
         you are running with Azure Synapse.
 
         Args:
@@ -66,19 +65,21 @@ class _FeathrDLocalSparkJobLauncher(SparkJobLauncher):
             main_jar_path (str): main file paths, usually your main jar file
             main_class_name (str): name of your main class
             arguments (List[str]): all the arguments you want to pass into the spark job
-            configuration (Dict[str, str]): Additional configs for the spark job
             python_files (List[str]): required .zip, .egg, or .py files of spark job
-            properties (Dict[str, str]): Additional System Properties for the spark job
-            job_tags (str): not used in local spark mode
+            configuration (Dict[str, str]): Additional configs for the spark job
+
             reference_files_path (str): not used in local spark mode
+            job_tags (str): not used in local spark mode
         """
-        logger.warning(f"Local Spark Mode only support basic params right now and should be used only for testing purpose.")
-        self.cmd_file, self.log_path = self._get_debug_file_name(self.debug_folder, prefix = job_name)
+        logger.warning(
+            f"Local Spark Mode only support basic params right now and should be used only for testing purpose."
+        )
+        self.cmd_file, self.log_path = self._get_debug_file_name(self.debug_folder, prefix=job_name)
 
         # Get conf and package arguments
         cfg = configuration.copy() if configuration else {}
         maven_dependency = f"{cfg.pop('spark.jars.packages', self.packages)},{FEATHR_MAVEN_ARTIFACT}"
-        spark_args = self._init_args(master=self.master, job_name=job_name, confs=cfg)
+        spark_args = self._init_args(job_name=job_name, confs=cfg)
 
         if not main_jar_path:
             # We don't have the main jar, use Maven
@@ -88,7 +89,8 @@ class _FeathrDLocalSparkJobLauncher(SparkJobLauncher):
                 # so we have to use a dummy jar as the main file.
                 logger.info(f"Main JAR file is not set, using default package '{FEATHR_MAVEN_ARTIFACT}' from Maven")
                 # Use the no-op jar as the main file
-                # This is a dummy jar which contains only one `org.example.Noop` class with one empty `main` function which does nothing
+                # This is a dummy jar which contains only one `org.example.Noop` class with one empty `main` function
+                # which does nothing
                 current_dir = Path(__file__).parent.resolve()
                 main_jar_path = os.path.join(current_dir, "noop-1.0.jar")
                 spark_args.extend(["--packages", maven_dependency, "--class", main_class_name, main_jar_path])
@@ -110,15 +112,15 @@ class _FeathrDLocalSparkJobLauncher(SparkJobLauncher):
 
         cmd = " ".join(spark_args)
 
-        log_append = open(f"{self.log_path}_{self.spark_job_num}.txt" , "a")
+        log_append = open(f"{self.log_path}_{self.spark_job_num}.txt", "a")
         proc = Popen(split(cmd), shell=False, stdout=log_append, stderr=STDOUT)
         logger.info(f"Detail job stdout and stderr are in {self.log_path}.")
 
         self.spark_job_num += 1
 
         with open(self.cmd_file, "a") as c:
-                c.write(" ".join(proc.args))
-                c.write("\n")
+            c.write(" ".join(proc.args))
+            c.write("\n")
 
         self.latest_spark_proc = proc
 
@@ -127,9 +129,8 @@ class _FeathrDLocalSparkJobLauncher(SparkJobLauncher):
         return proc
 
     def wait_for_completion(self, timeout_seconds: Optional[float] = 500) -> bool:
-        """
-        this function track local spark job commands and process status.
-        files will be write into `debug` folder under your workspace.
+        """This function track local spark job commands and process status.
+        Files will be write into `debug` folder under your workspace.
         """
         logger.info(f"{self.spark_job_num} local spark job(s) in this Launcher, only the latest will be monitored.")
         logger.info(f"Please check auto generated spark command in {self.cmd_file} and detail logs in {self.log_path}.")
@@ -138,12 +139,15 @@ class _FeathrDLocalSparkJobLauncher(SparkJobLauncher):
         start_time = time.time()
         retry = self.retry
 
-        log_read = open(f"{self.log_path}_{self.spark_job_num-1}.txt" , "r")
+        log_read = open(f"{self.log_path}_{self.spark_job_num-1}.txt", "r")
         while proc.poll() is None and (((timeout_seconds is None) or (time.time() - start_time < timeout_seconds))):
             time.sleep(1)
             try:
                 if retry < 1:
-                    logger.warning(f"Spark job has hang for {self.retry * self.retry_sec} seconds. latest msg is {last_line}. please check {log_read.name}")
+                    logger.warning(
+                        f"Spark job has hang for {self.retry * self.retry_sec} seconds. latest msg is {last_line}. \
+                            Please check {log_read.name}"
+                    )
                     if self.clean_up:
                         self._clean_up()
                         proc.wait()
@@ -166,19 +170,25 @@ class _FeathrDLocalSparkJobLauncher(SparkJobLauncher):
         log_read.close()
 
         if proc.returncode == None:
-            logger.warning(f"Spark job with pid {self.latest_spark_proc.pid} not completed after {timeout_seconds} sec time out setting, please check.")
+            logger.warning(
+                f"Spark job with pid {self.latest_spark_proc.pid} not completed after {timeout_seconds} sec \
+                    time out setting. Please check."
+            )
             if self.clean_up:
                 self._clean_up()
                 proc.wait()
                 return True
         elif proc.returncode == 1:
-            logger.warning(f"Spark job with pid {self.latest_spark_proc.pid} is not successful, please check.")
+            logger.warning(f"Spark job with pid {self.latest_spark_proc.pid} is not successful. Please check.")
             return False
         else:
-            logger.info(f"Spark job with pid {self.latest_spark_proc.pid} finished in: {int(job_duration)} seconds with returncode {proc.returncode}")
+            logger.info(
+                f"Spark job with pid {self.latest_spark_proc.pid} finished in: {int(job_duration)} seconds \
+                    with returncode {proc.returncode}"
+            )
             return True
 
-    def _clean_up(self, proc:Popen = None):
+    def _clean_up(self, proc: Popen = None):
         logger.warning(f"Terminate the spark job due to as clean_up is set to True.")
         if not proc:
             self.latest_spark_proc.terminate()
@@ -189,34 +199,35 @@ class _FeathrDLocalSparkJobLauncher(SparkJobLauncher):
         """Get the status of the job, only a placeholder for local spark"""
         return self.latest_spark_proc.returncode
 
-    def _init_args(self, master: str, job_name: str, confs: Dict[str, str]):
-        if master is None:
-            master = "local[*]"
-        logger.info(f"Spark job: {job_name} is running on local spark with master: {master}.")
+    def _init_args(self, job_name: str, confs: Dict[str, str]) -> List[str]:
+        logger.info(f"Spark job: {job_name} is running on local spark with master: {self.master}.")
         args = [
             "spark-submit",
-            "--master", master,
-            "--name", job_name,
-            "--conf", "spark.hadoop.fs.wasbs.impl=org.apache.hadoop.fs.azure.NativeAzureFileSystem",
-            "--conf", "spark.hadoop.fs.wasbs=org.apache.hadoop.fs.azure.NativeAzureFileSystem",
+            "--master",
+            self.master,
+            "--name",
+            job_name,
+            "--conf",
+            "spark.hadoop.fs.wasbs.impl=org.apache.hadoop.fs.azure.NativeAzureFileSystem",
+            "--conf",
+            "spark.hadoop.fs.wasbs=org.apache.hadoop.fs.azure.NativeAzureFileSystem",
         ]
 
-        for key, value in confs.items():
-            args.extend(["--conf", f"{key}={value}"])
+        for k, v in confs.items():
+            args.extend(["--conf", f"{k}={v}"])
 
         return args
 
-    def _get_debug_file_name(self, debug_folder: str = "debug", prefix:str = None):
-        """
-        auto generated command will be write into cmd file
-        spark job output will be write into log path with job number as suffix
+    def _get_debug_file_name(self, debug_folder: str = "debug", prefix: str = None):
+        """Auto generated command will be write into cmd file.
+        Spark job output will be write into log path with job number as suffix.
         """
         prefix += datetime.now().strftime("%Y%m%d%H%M%S")
         debug_path = os.path.join(debug_folder, prefix)
 
         print(debug_path)
         if not os.path.exists(debug_path):
-                os.makedirs(debug_path)
+            os.makedirs(debug_path)
 
         cmd_file = os.path.join(debug_path, f"command.sh")
         log_path = os.path.join(debug_path, f"log")
