@@ -14,7 +14,7 @@ from feathr.constants import OUTPUT_FORMAT
 
 def get_result_pandas_df(
     client: FeathrClient,
-    format: str = None,
+    data_format: str = None,
     res_url: str = None,
     local_folder: str = None,
 ) -> pd.DataFrame:
@@ -22,20 +22,20 @@ def get_result_pandas_df(
 
     Args:
         client: Feathr client
-        format: Format to read the downloaded files. Currently support `parquet`, `delta`, `avro`, and `csv`. Default to `avro` if not specified.
+        data_format: Format to read the downloaded files. Currently support `parquet`, `delta`, `avro`, and `csv`. Default to `avro` if not specified.
         res_url: Output URL to download files. Note that this will not block the job so you need to make sure the job is finished and result URL contains actual data.
         local_folder (Optional): Specify the absolute download path. if the user does not provide this, function will create a temporary directory and delete it after reading the dataframe.
 
     Returns:
         pandas DataFrame
     """
-    return get_result_df(client, format, res_url, local_folder)
+    return get_result_df(client, data_format, res_url, local_folder)
 
 
 def get_result_spark_df(
     spark: SparkSession,
     client: FeathrClient,
-    format: str = None,
+    data_format: str = None,
     res_url: str = None,
     local_folder: str = None,
 ) -> DataFrame:
@@ -44,19 +44,19 @@ def get_result_spark_df(
     Args:
         spark: Spark session
         client: Feathr client
-        format: Format to read the downloaded files. Currently support `parquet`, `delta`, `avro`, and `csv`. Default to `avro` if not specified.
+        data_format: Format to read the downloaded files. Currently support `parquet`, `delta`, `avro`, and `csv`. Default to `avro` if not specified.
         res_url: Output URL to download files. Note that this will not block the job so you need to make sure the job is finished and result URL contains actual data.
         local_folder (Optional): Specify the absolute download path. if the user does not provide this, function will create a temporary directory and delete it after reading the dataframe.
 
     Returns:
         Spark DataFrame
     """
-    return get_result_df(client, format, res_url, local_folder, spark=spark)
+    return get_result_df(client, data_format, res_url, local_folder, spark=spark)
 
 
 def get_result_df(
     client: FeathrClient,
-    format: str = None,
+    data_format: str = None,
     res_url: str = None,
     local_folder: str = None,
     spark: SparkSession = None,
@@ -65,13 +65,13 @@ def get_result_df(
 
     Args:
         client: Feathr client
-        format: Format to read the downloaded files. Currently support `parquet`, `delta`, `avro`, and `csv`. Default to `avro` if not specified.
+        data_format: Format to read the downloaded files. Currently support `parquet`, `delta`, `avro`, and `csv`. Default to `avro` if not specified.
         res_url: Output URL to download files. Note that this will not block the job so you need to make sure the job is finished and result URL contains actual data.
         local_folder (Optional): Specify the absolute download path. if the user does not provide this, function will create a temporary directory and delete it after reading the dataframe.
-        spark (Optional): Spark session
+        spark (Optional): Spark session. If provided, the function returns spark Dataframe. Otherwise, it returns pd.DataFrame.
 
     Returns:
-        Either Spark or pandas DataFrame
+        Either Spark or pandas DataFrame.
     """
     # use a result url if it's provided by the user, otherwise use the one provided by the job
     res_url: str = res_url or client.get_job_result_uri(block=True, timeout_sec=1200)
@@ -79,6 +79,8 @@ def get_result_df(
         raise RuntimeError(
             "res_url is None. Please make sure either you provide a res_url or make sure the job finished in FeathrClient has a valid result URI."
         )
+
+    tmp_dir = None
 
     if client.spark_runtime == "local":
         local_dir_path = res_url
@@ -99,32 +101,33 @@ def get_result_df(
 
     # use user provided format, if there isn't one, then otherwise use the one provided by the job;
     # if none of them is available, "avro" is the default format.
-    format: str = format or client.get_job_tags().get(OUTPUT_FORMAT, "")
-    if format is None or format == "":
-        format = "avro"
+    data_format: str = data_format or client.get_job_tags().get(OUTPUT_FORMAT, "")
+    if data_format is None or data_format == "":
+        data_format = "avro"
 
     result_df = None
 
     if spark is not None:
-        result_df = spark.read.format(format).load(local_dir_path)
+        result_df = spark.read.format(data_format).load(local_dir_path)
     else:
-        result_df = _read_files_to_pandas_df(dir_path=local_dir_path, format=format)
+        result_df = _read_files_to_pandas_df(dir_path=local_dir_path, data_format=data_format)
 
-    if local_folder is None:
+    if tmp_dir is not None:
         tmp_dir.cleanup()
 
     return result_df
 
 
-def _read_files_to_pandas_df(dir_path: str, format: str = "avro") -> pd.DataFrame:
-    if format.casefold() == "parquet":
+def _read_files_to_pandas_df(dir_path: str, data_format: str = "avro") -> pd.DataFrame:
+
+    if data_format == "parquet":
         from pyarrow.parquet import ParquetDataset
 
         files = glob.glob(os.path.join(dir_path, "*.parquet"))
         ds = ParquetDataset(files)
         return ds.read().to_pandas()
 
-    elif format.casefold() == "delta":
+    elif data_format == "delta":
         from deltalake import DeltaTable
 
         delta = DeltaTable(dir_path)
@@ -138,7 +141,7 @@ def _read_files_to_pandas_df(dir_path: str, format: str = "avro") -> pd.DataFram
         #     "Please use Azure Synapse to read the result in the Azure Synapse cluster. Reading local results is not supported for Azure Synapse."
         # )
 
-    elif format.casefold() == "avro":
+    elif data_format == "avro":
         import pandavro as pdx
 
         dataframe_list = [
@@ -146,7 +149,7 @@ def _read_files_to_pandas_df(dir_path: str, format: str = "avro") -> pd.DataFram
         ]
         return pd.concat(dataframe_list, axis=0)
 
-    elif format.casefold() == "csv":
+    elif data_format == "csv":
         dataframe_list = []
         for file in glob.glob(os.path.join(dir_path, "*.csv")):
             try:
@@ -163,5 +166,5 @@ def _read_files_to_pandas_df(dir_path: str, format: str = "avro") -> pd.DataFram
 
     else:
         raise ValueError(
-            f"{format} is currently not supported in get_result_df. Currently only parquet, delta, avro, and csv are supported, please consider writing a customized function to read the result."
+            f"{data_format} is currently not supported in get_result_df. Currently only parquet, delta, avro, and csv are supported, please consider writing a customized function to read the result."
         )
