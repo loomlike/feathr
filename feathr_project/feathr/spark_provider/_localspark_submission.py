@@ -10,7 +10,7 @@ from loguru import logger
 
 from pyspark import *
 
-from subprocess import TimeoutExpired, STDOUT, Popen
+from subprocess import STDOUT, Popen
 from shlex import split
 from feathr.constants import FEATHR_MAVEN_ARTIFACT
 
@@ -65,7 +65,7 @@ class _FeathrDLocalSparkJobLauncher(SparkJobLauncher):
             job_name (str): name of the job
             main_jar_path (str): main file paths, usually your main jar file
             main_class_name (str): name of your main class
-            arguments (str): all the arguments you want to pass into the spark job
+            arguments (List[str]): all the arguments you want to pass into the spark job
             configuration (Dict[str, str]): Additional configs for the spark job
             python_files (List[str]): required .zip, .egg, or .py files of spark job
             properties (Dict[str, str]): Additional System Properties for the spark job
@@ -74,25 +74,14 @@ class _FeathrDLocalSparkJobLauncher(SparkJobLauncher):
         """
         logger.warning(f"Local Spark Mode only support basic params right now and should be used only for testing purpose.")
         self.cmd_file, self.log_path = self._get_debug_file_name(self.debug_folder, prefix = job_name)
-        args = self._init_args(master = self.master, job_name=job_name)
 
-        if properties:
-            arguments.extend(["--system-properties", json.dumps(properties)])
+        # Get conf and package arguments
+        cfg = configuration.copy() if configuration else {}
+        maven_dependency = f"{cfg.pop('spark.jars.packages', self.packages)},{FEATHR_MAVEN_ARTIFACT}"
+        spark_args = self._init_args(master=self.master, job_name=job_name, confs=cfg)
 
-        if configuration:
-            cfg = configuration.copy()  # We don't want to mess up input parameters
-        else:
-            cfg = {}
-        
         if not main_jar_path:
             # We don't have the main jar, use Maven
-            # Add Maven dependency to the job configuration
-            if "spark.jars.packages" in cfg:
-                cfg["spark.jars.packages"] = ",".join(
-                    [cfg["spark.jars.packages"], FEATHR_MAVEN_ARTIFACT])
-            else:
-                cfg["spark.jars.packages"] = ",".join([self.packages, FEATHR_MAVEN_ARTIFACT])
-
             if not python_files:
                 # This is a JAR job
                 # Azure Synapse/Livy doesn't allow JAR job starts from Maven directly, we must have a jar file uploaded.
@@ -102,20 +91,26 @@ class _FeathrDLocalSparkJobLauncher(SparkJobLauncher):
                 # This is a dummy jar which contains only one `org.example.Noop` class with one empty `main` function which does nothing
                 current_dir = Path(__file__).parent.resolve()
                 main_jar_path = os.path.join(current_dir, "noop-1.0.jar")
-                args.extend(["--packages", cfg["spark.jars.packages"],"--class", main_class_name, main_jar_path])
+                spark_args.extend(["--packages", maven_dependency, "--class", main_class_name, main_jar_path])
             else:
-                args.extend(["--packages", cfg["spark.jars.packages"]])
-                # This is a PySpark job, no more things to 
+                spark_args.extend(["--packages", maven_dependency])
+                # This is a PySpark job, no more things to
                 if python_files.__len__() > 1:
-                    args.extend(["--py-files", ",".join(python_files[1:])])
+                    spark_args.extend(["--py-files", ",".join(python_files[1:])])
                 print(python_files)
-                args.append(python_files[0])
+                spark_args.append(python_files[0])
         else:
-            args.extend(["--class", main_class_name, main_jar_path])
+            spark_args.extend(["--class", main_class_name, main_jar_path])
 
-        cmd = " ".join(args) + " " + " ".join(arguments)
+        if arguments:
+            spark_args.extend(arguments)
 
-        log_append = open(f"{self.log_path}_{self.spark_job_num}.txt" , "a")     
+        if properties:
+            spark_args.extend(["--system-properties", json.dumps(properties)])
+
+        cmd = " ".join(spark_args)
+
+        log_append = open(f"{self.log_path}_{self.spark_job_num}.txt" , "a")
         proc = Popen(split(cmd), shell=False, stdout=log_append, stderr=STDOUT)
         logger.info(f"Detail job stdout and stderr are in {self.log_path}.")
 
@@ -143,7 +138,7 @@ class _FeathrDLocalSparkJobLauncher(SparkJobLauncher):
         start_time = time.time()
         retry = self.retry
 
-        log_read = open(f"{self.log_path}_{self.spark_job_num-1}.txt" , "r") 
+        log_read = open(f"{self.log_path}_{self.spark_job_num-1}.txt" , "r")
         while proc.poll() is None and (((timeout_seconds is None) or (time.time() - start_time < timeout_seconds))):
             time.sleep(1)
             try:
@@ -168,7 +163,7 @@ class _FeathrDLocalSparkJobLauncher(SparkJobLauncher):
                 retry -= 1
 
         job_duration = time.time() - start_time
-        log_read.close() 
+        log_read.close()
 
         if proc.returncode == None:
             logger.warning(f"Spark job with pid {self.latest_spark_proc.pid} not completed after {timeout_seconds} sec time out setting, please check.")
@@ -194,17 +189,21 @@ class _FeathrDLocalSparkJobLauncher(SparkJobLauncher):
         """Get the status of the job, only a placeholder for local spark"""
         return self.latest_spark_proc.returncode
 
-    def _init_args(self, master:str, job_name:str):
+    def _init_args(self, master: str, job_name: str, confs: Dict[str, str]):
         if master is None:
             master = "local[*]"
         logger.info(f"Spark job: {job_name} is running on local spark with master: {master}.")
         args = [
             "spark-submit",
-            "--master",master,
-            "--name",job_name,
+            "--master", master,
+            "--name", job_name,
             "--conf", "spark.hadoop.fs.wasbs.impl=org.apache.hadoop.fs.azure.NativeAzureFileSystem",
             "--conf", "spark.hadoop.fs.wasbs=org.apache.hadoop.fs.azure.NativeAzureFileSystem",
         ]
+
+        for key, value in confs.items():
+            args.extend(["--conf", f"{key}={value}"])
+
         return args
 
     def _get_debug_file_name(self, debug_folder: str = "debug", prefix:str = None):
@@ -227,7 +226,7 @@ class _FeathrDLocalSparkJobLauncher(SparkJobLauncher):
     def _get_default_package(self):
         # default packages of Feathr Core, requires manual update when new dependency introduced or package updated.
         # TODO: automate this process, e.g. read from pom.xml
-        # TODO: dynamical modularization: add package only when it's used in the job, e.g. data source dependencies. 
+        # TODO: dynamical modularization: add package only when it's used in the job, e.g. data source dependencies.
         packages = []
         packages.append("org.apache.spark:spark-avro_2.12:3.3.0")
         packages.append("com.microsoft.sqlserver:mssql-jdbc:10.2.0.jre8")
@@ -236,7 +235,7 @@ class _FeathrDLocalSparkJobLauncher(SparkJobLauncher):
         packages.append("com.fasterxml.jackson.core:jackson-databind:2.12.6.1")
         packages.append("org.apache.hadoop:hadoop-mapreduce-client-core:2.7.7")
         packages.append("org.apache.hadoop:hadoop-common:2.7.7")
-        packages.append("org.apache.hadoop:hadoop-azure:3.2.0") 
+        packages.append("org.apache.hadoop:hadoop-azure:3.2.0")
         packages.append("org.apache.avro:avro:1.8.2,org.apache.xbean:xbean-asm6-shaded:4.10")
         packages.append("org.apache.spark:spark-sql-kafka-0-10_2.12:3.1.3")
         packages.append("com.microsoft.azure:azure-eventhubs-spark_2.12:2.3.21")
