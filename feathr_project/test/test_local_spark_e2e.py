@@ -18,7 +18,7 @@ def test_local_spark_get_offline_features():
     #This Test is for Local Spark only
     if not _is_local():
         return
-    
+
     test_workspace_dir = Path(
         __file__).parent.resolve() / "test_user_workspace"
 
@@ -32,21 +32,21 @@ def test_local_spark_get_offline_features():
     assert df.shape[0] > 0
 
     shutil.rmtree('debug')
-    return 
+    return
 
 def test_local_spark_pyudf_get_offline_features():
     #This Test is for Local Spark only
     if not _is_local():
         return
     client = _local_client_setup()
-    
+
     output_path, proc = _udf_features(client)
 
     client.wait_job_to_finish()
     df = parse_avro_result(output_path)
     assert df.shape[0] > 0
     shutil.rmtree('debug')
-    return 
+    return
 
 def test_local_spark_materialization():
     #This Test is for Local Spark only
@@ -68,6 +68,8 @@ def _is_local() -> bool:
     else:
         return False
 
+
+# TODO make this fixture
 def _local_client_setup(local_workspace:str = None):
     if not local_workspace:
         local_workspace = Path(
@@ -151,7 +153,7 @@ def _non_udf_features(client:FeathrClient = None):
 
     feature_query = FeatureQuery(
             feature_list=["f_location_avg_fare"], key=location_id)
-    
+
     settings = ObservationSettings(
         observation_path="./green_tripdata_2020-04_with_index.csv",
         #observation_path="wasbs://public@azurefeathrstorage.blob.core.windows.net/sample_data/green_tripdata_2020-04.csv",
@@ -170,7 +172,7 @@ def _non_udf_features(client:FeathrClient = None):
 def _udf_features(client:FeathrClient = None):
     if not client:
         client = _local_client_setup()
-    
+
     batch_source1 = HdfsSource(name="nycTaxiBatchSource_add_new_dropoff_and_fare_amount_column",
                               path="./green_tripdata_2020-04_with_index.csv",
                               preprocessing=add_new_dropoff_and_fare_amount_column,
@@ -318,7 +320,7 @@ def _feature_gen_test(client:FeathrClient = None):
 
     client.build_features(anchor_list=[agg_anchor, request_anchor], derived_feature_list=[
         f_trip_time_distance, f_trip_time_rounded])
-    
+
     online_test_table = "localSparkTest"
 
     backfill_time = BackfillTime(start=datetime(
@@ -341,6 +343,6 @@ def parse_avro_result(output_path:str):
     # assuming the result are in avro format
     for file in glob.glob(os.path.join(output_path, '*.avro')):
         dataframe_list.append(pdx.read_avro(file))
-    
+
     vertical_concat_df = pd.concat(dataframe_list, axis=0)
     return vertical_concat_df
