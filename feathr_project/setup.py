@@ -5,9 +5,26 @@ from pathlib import Path
 root_path = Path(__file__).resolve().parent.parent
 long_description = (root_path / "docs/README.md").read_text(encoding="utf8")
 
+
+extras_require=dict(
+    dev=[
+        "black>=22.1.0",    # formatter
+        "isort",            # sort import statements
+        "pytest>=7",
+        "pytest-mock>=3.8.1",
+    ],
+    notebook=[
+        "jupyter==1.0.0",
+        "matplotlib==3.6.1",
+        "papermill>=2.1.2,<3",      # to test run notebooks
+        "scrapbook>=0.5.0,<1.0.0",  # to scrap notebook outputs
+    ],
+)
+extras_require["all"] = list(set(sum([*extras_require.values()], [])))
+
 setup(
     name='feathr',
-    version='0.8.0',
+    version='0.8.2',
     long_description=long_description,
     long_description_content_type="text/markdown",
     author_email="feathr-technical-discuss@lists.lfaidata.foundation",
@@ -35,10 +52,9 @@ setup(
         "pyarrow<=9.0.0",
         "pyspark>=3.1.2",
         "python-snappy<=0.6.1",
-        # fixing https://github.com/feathr-ai/feathr/issues/687
-        "deltalake<=0.5.8",
+        "deltalake>=0.6.2",
         "graphlib_backport<=1.0.3",
-        "protobuf==3.*",
+        "protobuf<=3.19.4,>=3.0.0",
         "confluent-kafka<=1.9.2",
         "databricks-cli<=0.17.3",
         "avro<=1.11.1",
@@ -57,14 +73,7 @@ setup(
     tests_require=[  # TODO: This has been depricated
         "pytest",
     ],
-    extras_require=dict(
-        dev=[
-            "black>=22.1.0",    # formatter
-            "isort",            # sort import statements
-            "pytest>=7",
-            "pytest-mock>=3.8.1",
-        ],
-    ),
+    extras_require=extras_require,
     entry_points={
         'console_scripts': ['feathr=feathrcli.cli:cli']
     },

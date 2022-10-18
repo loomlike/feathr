@@ -24,7 +24,7 @@ Feathr has native cloud integration. Here are the steps to use Feathr on Azure:
 
 1. Follow the [Feathr ARM deployment guide](https://feathr-ai.github.io/feathr/how-to-guides/azure-deployment-arm.html) to run Feathr on Azure. This allows you to quickly get started with automated deployment using Azure Resource Manager template. Alternatively, if you want to set up everything manually, you can checkout the [Feathr CLI deployment guide](https://feathr-ai.github.io/feathr/how-to-guides/azure-deployment-cli.html) to run Feathr on Azure. This allows you to understand what is going on and set up one resource at a time.
 
-2. Once the deployment is complete,run the Feathr Jupyter Notebook by clicking this button:  [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/feathr-ai/feathr/main?labpath=feathr_project%2Ffeathrcli%2Fdata%2Ffeathr_user_workspace%2Fnyc_driver_demo.ipynb). 
+2. Once the deployment is complete,run the Feathr Jupyter Notebook by clicking this button:  [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/feathr-ai/feathr/main?labpath=docs%2Fsamples%2Fnyc_taxi_demo.ipynb).
 3. You only need to change the specified `Resource Prefix`.
 
 ## Step 2: Install Feathr
@@ -61,9 +61,6 @@ project_config:
     # Redis password for your online store
     - "REDIS_PASSWORD"
     # Client IDs and Client Secret for the service principal. Read the getting started docs on how to get those information.
-    - "AZURE_CLIENT_ID"
-    - "AZURE_TENANT_ID"
-    - "AZURE_CLIENT_SECRET"
 
 offline_store:
 ---
@@ -98,9 +95,6 @@ These values can also be retrieved by using cloud key value store, such as [Azur
 ```python
 import os
 os.environ['REDIS_PASSWORD'] = ''
-os.environ['AZURE_CLIENT_ID'] = ''
-os.environ['AZURE_TENANT_ID'] = ''
-os.environ['AZURE_CLIENT_SECRET'] = ''
 ```
 
 Please refer to [A note on using azure key vault to store credentials](https://github.com/feathr-ai/feathr/blob/41e7496b38c43af6d7f8f1de842f657b27840f6d/docs/how-to-guides/feathr-configuration-and-env.md#a-note-on-using-azure-key-vault-to-store-credentials) for more details.
