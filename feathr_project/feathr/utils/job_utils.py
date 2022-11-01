@@ -1,12 +1,10 @@
-import glob
 from multiprocessing.sharedctypes import Value
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Callable, List, Union
+from typing import Union
 
 from loguru import logger
 import pandas as pd
-from pandas.errors import EmptyDataError
 from pyspark.sql import DataFrame, SparkSession
 
 from feathr.client import FeathrClient
@@ -87,8 +85,8 @@ def get_result_df(
     # use a result url if it's provided by the user, otherwise use the one provided by the job
     res_url: str = res_url or client.get_job_result_uri(block=True, timeout_sec=1200)
     if res_url is None:
-        raise RuntimeError(
-            "res_url is None. Please make sure either you provide a res_url or make sure the job finished in FeathrClient has a valid result URI."
+        raise ValueError(
+            "`res_url` is None. Please make sure either you provide a res_url or make sure the job finished in FeathrClient has a valid result URI."
         )
 
     if client.spark_runtime == "local":
@@ -113,6 +111,8 @@ def get_result_df(
             # Databricks uses "dbfs:/" prefix for spark paths
             if not local_cache_path.startswith("dbfs:"):
                 local_cache_path = str(Path("dbfs:", local_cache_path.lstrip("/")))
+    else:
+        logger.warning("This utility function currently supports local spark and databricks. You may encounter unexpected results on other platforms.")
     # TODO elif azure_synapse
 
     if local_cache_path != res_url:
@@ -128,7 +128,10 @@ def get_result_df(
     result_df = None
 
     if spark is not None:
-        result_df = spark.read.format(data_format).load(local_cache_path)
+        if data_format == "csv":
+            result_df = spark.read.option("header", True).csv(local_cache_path)
+        else:
+            result_df = spark.read.format(data_format).load(local_cache_path)
     else:
         result_df = _load_files_to_pandas_df(
             dir_path=local_cache_path.replace("dbfs:", "/dbfs"),  # replace to python path if spark path is provided.
@@ -141,11 +144,7 @@ def get_result_df(
 def _load_files_to_pandas_df(dir_path: str, data_format: str = "avro") -> pd.DataFrame:
 
     if data_format == "parquet":
-        from pyarrow.parquet import ParquetDataset
-
-        files = glob.glob(str(Path(dir_path, "*.parquet")))
-        ds = ParquetDataset(files)
-        return ds.read().to_pandas()
+        return pd.read_parquet(dir_path)
 
     elif data_format == "delta":
         from deltalake import DeltaTable
@@ -163,37 +162,24 @@ def _load_files_to_pandas_df(dir_path: str, data_format: str = "avro") -> pd.Dat
 
     elif data_format == "avro":
         import pandavro as pdx
-
-        file_paths = glob.glob(str(Path(dir_path, "*.avro")))
-
-        try:
-            return _concat_pandas_df(file_paths, pdx.read_avro)
-        except EmptyDataError:
-            raise ValueError(f"No data files found in {dir_path}")
+        if Path(dir_path).is_file():
+            return pdx.read_avro(dir_path)
+        else:
+            try:
+                return pd.concat([pdx.read_avro(f) for f in Path(dir_path).glob("*.avro")]).reset_index(drop=True)
+            except ValueError:  # No object to concat when the dir is empty
+                return pd.DataFrame()
 
     elif data_format == "csv":
-        file_paths = glob.glob(str(Path(dir_path, "*.csv")))
-
-        try:
-            return _concat_pandas_df(file_paths, pd.read_csv)
-        except EmptyDataError:
-            raise ValueError(f"No data files found in {dir_path}")
+        if Path(dir_path).is_file():
+            return pd.read_csv(dir_path)
+        else:
+            try:
+                return pd.concat([pd.read_csv(f) for f in Path(dir_path).glob("*.csv")]).reset_index(drop=True)
+            except ValueError:  # No object to concat when the dir is empty
+                return pd.DataFrame()
 
     else:
         raise ValueError(
             f"{data_format} is currently not supported in get_result_df. Currently only parquet, delta, avro, and csv are supported, please consider writing a customized function to read the result."
         )
-
-
-def _concat_pandas_df(file_paths: List[str], pandas_read_fn: Callable) -> pd.DataFrame:
-    dataframe_list = None
-    try:
-        dataframe_list = [pandas_read_fn(file) for file in file_paths]
-    except EmptyDataError:
-        # in case there are empty files
-        pass
-
-    if not dataframe_list:
-        raise EmptyDataError
-
-    return pd.concat(dataframe_list, axis=0).reset_index(drop=True)

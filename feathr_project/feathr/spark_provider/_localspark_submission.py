@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import datetime
 import json
 import os
@@ -128,7 +129,7 @@ class _FeathrLocalSparkJobLauncher(SparkJobLauncher):
 
         logger.info(f"Local Spark job submit with pid: {proc.pid}.")
 
-        self.job_tags = job_tags
+        self.job_tags = deepcopy(job_tags)
 
         return proc
 
@@ -209,7 +210,7 @@ class _FeathrLocalSparkJobLauncher(SparkJobLauncher):
         Returns:
             str: output_path
         """
-        return self.job_tags.get(OUTPUT_PATH_TAG, None)
+        return self.job_tags.get(OUTPUT_PATH_TAG, None) if self.job_tags else None
 
     def get_job_tags(self) -> Dict[str, str]:
         """Get job tags
